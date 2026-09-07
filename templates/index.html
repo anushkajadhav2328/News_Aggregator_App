@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>News Aggregator - Live News Platform</title>
+  <meta name="description" content="A dynamic news aggregator web application fetching, preprocessing, and organizing news from multiple sources.">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <!-- Favicon icon using SVG data URI -->
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📰</text></svg>">
+</head>
+<body>
+
+  <!-- Top Header & Navigation -->
+  <header class="site-header">
+    <div class="header-container">
+      
+      <!-- Brand / Logo -->
+      <a href="/" class="brand" title="News Aggregator">
+        <div class="brand-icon">⚡</div>
+        <div class="brand-text">
+          <h1>NewsPulse <span class="brand-badge">Live</span></h1>
+          <p>Multi-Source Realtime News Aggregator</p>
+        </div>
+      </a>
+
+      <!-- Search Box -->
+      <div class="search-container">
+        <form id="searchForm" class="search-form" role="search">
+          <span class="search-icon">🔍</span>
+          <input 
+            type="search" 
+            id="searchInput" 
+            class="search-input" 
+            placeholder="Search news by topic, keyword, or company..." 
+            autocomplete="off"
+            aria-label="Search articles"
+          >
+          <button type="button" id="searchClearBtn" class="search-clear-btn" title="Clear search">✕</button>
+          <button type="submit" class="search-btn">Search</button>
+        </form>
+      </div>
+
+      <!-- Action Buttons -->
+      <div class="header-actions">
+        <!-- Bookmarks Trigger -->
+        <button id="bookmarksBtn" class="icon-btn" title="Saved Articles" aria-label="View Saved Articles">
+          🔖
+          <span id="bookmarkCount" class="badge-count">0</span>
+        </button>
+
+        <!-- API Settings Modal Trigger -->
+        <button id="settingsBtn" class="icon-btn" title="API Configuration" aria-label="API Settings">
+          ⚙️
+        </button>
+
+        <!-- Theme Toggle (Dark/Light) -->
+        <button id="themeToggleBtn" class="icon-btn" title="Toggle Light/Dark Theme" aria-label="Toggle theme">
+          🌙
+        </button>
+      </div>
+
+    </div>
+  </header>
+
+  <!-- Categories Horizontal Navigation Bar -->
+  <nav class="categories-nav" aria-label="News categories">
+    <div class="categories-container" id="categoryContainer">
+      <button class="cat-btn active" data-category="general">🌐 General</button>
+      <button class="cat-btn" data-category="business">💼 Business</button>
+      <button class="cat-btn" data-category="technology">💻 Technology</button>
+      <button class="cat-btn" data-category="sports">⚽ Sports</button>
+      <button class="cat-btn" data-category="entertainment">🎬 Entertainment</button>
+      <button class="cat-btn" data-category="health">🩺 Health</button>
+      <button class="cat-btn" data-category="science">🔬 Science</button>
+    </div>
+  </nav>
+
+  <!-- Filter & Controls Toolbar -->
+  <section class="toolbar-section">
+    <div class="toolbar-card">
+      
+      <!-- Left: Status & Active Provider -->
+      <div class="toolbar-left">
+        <div class="status-badge" id="providerBadge" title="Data source provider">
+          <span class="status-dot"></span>
+          <span id="providerText">Connecting to API...</span>
+        </div>
+        <button id="refreshBtn" class="icon-btn" style="width: auto; padding: 0.35rem 0.75rem; gap: 0.35rem; font-size: 0.82rem;" title="Refresh news">
+          🔄 Refresh
+        </button>
+      </div>
+
+      <!-- Right: Country, Source & Sort Dropdowns -->
+      <div class="toolbar-right">
+        
+        <!-- Country Select -->
+        <div class="filter-group">
+          <label for="countrySelect">Region:</label>
+          <select id="countrySelect" class="custom-select">
+            <option value="us" selected>🇺🇸 United States</option>
+            <option value="in">🇮🇳 India</option>
+            <option value="gb">🇬🇧 United Kingdom</option>
+            <option value="ca">🇨🇦 Canada</option>
+            <option value="au">🇦🇺 Australia</option>
+          </select>
+        </div>
+
+        <!-- News Source Filter -->
+        <div class="filter-group">
+          <label for="sourceSelect">Source:</label>
+          <select id="sourceSelect" class="custom-select">
+            <option value="all" selected>All Sources</option>
+          </select>
+        </div>
+
+        <!-- Sorting Filter -->
+        <div class="filter-group">
+          <label for="sortSelect">Sort:</label>
+          <select id="sortSelect" class="custom-select">
+            <option value="newest" selected>Newest First</option>
+            <option value="oldest">Oldest First</option>
+            <option value="title">Headline (A-Z)</option>
+          </select>
+        </div>
+
+      </div>
+
+    </div>
+  </section>
+
+  <!-- Main News Content Section -->
+  <main class="main-content">
+    <div class="section-header">
+      <h2 class="section-title" id="sectionHeading">
+        <span>Latest Top Stories</span>
+      </h2>
+      <span class="results-count" id="resultsCount">Loading articles...</span>
+    </div>
+
+    <!-- Dynamic News Cards Grid -->
+    <div class="news-grid" id="newsGrid">
+      <!-- Skeleton Loading Placeholders will be rendered here by JS initially -->
+    </div>
+  </main>
+
+  <!-- Bookmarks Modal Dialog -->
+  <div id="bookmarksModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="bookmarksTitle">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 class="modal-title" id="bookmarksTitle">🔖 Saved Bookmarks</h3>
+        <button type="button" class="modal-close" data-close-modal title="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="bookmarksList" class="bookmarks-list">
+          <!-- Bookmarked items injected by JavaScript -->
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" id="clearAllBookmarksBtn" class="btn-secondary" style="color: var(--danger);">Clear All</button>
+        <button type="button" class="btn-primary" data-close-modal>Done</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- API Key Settings Modal Dialog -->
+  <div id="settingsModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 class="modal-title" id="settingsTitle">⚙️ NewsAPI Key Pool (3-4 Keys)</h3>
+        <button type="button" class="modal-close" data-close-modal title="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="form-hint" style="margin-bottom: 1.25rem;">
+          Configure up to <strong>4 NewsAPI keys</strong> for automatic <strong>Round-Robin rotation</strong> and <strong>Quota Failover</strong>. When one key reaches its 100 requests/day limit, the server automatically switches to the next key.
+        </p>
+        
+        <div class="form-group">
+          <label class="form-label" for="apiKeyInput1">API Key 1 (Primary)</label>
+          <input type="password" id="apiKeyInput1" class="form-input" placeholder="e.g. a9c24e681bfd482285a81dbf217c0934">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="apiKeyInput2">API Key 2 (Backup 1)</label>
+          <input type="password" id="apiKeyInput2" class="form-input" placeholder="e.g. b7f83a152e04419992c431df89ab1052">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="apiKeyInput3">API Key 3 (Backup 2)</label>
+          <input type="password" id="apiKeyInput3" class="form-input" placeholder="e.g. c1e459a72b834ef1907722a4b9cd3180">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="apiKeyInput4">API Key 4 (Backup 3)</label>
+          <input type="password" id="apiKeyInput4" class="form-input" placeholder="e.g. d8b762f019a34bc681940173eef1284a">
+        </div>
+
+        <p class="form-hint">
+          Free keys can be obtained at <a href="https://newsapi.org/register" target="_blank" rel="noopener noreferrer" style="color: var(--primary);">newsapi.org/register</a>.
+          If all keys expire or are left blank, the app seamlessly falls back to the Free Live Global Feed.
+        </p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" id="resetApiKeyBtn" class="btn-secondary">Use Free Live Feed</button>
+        <button type="button" id="saveApiKeyBtn" class="btn-primary">Save All Keys</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div id="toastContainer" class="toast-container" aria-live="polite"></div>
+
+  <!-- Page Footer -->
+  <footer class="site-footer">
+    <p>&copy; 2026-2027 News Aggregator &bull; Real-time Multi-Source News Platform</p>
+  </footer>
+
+  <!-- Frontend JavaScript -->
+  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
