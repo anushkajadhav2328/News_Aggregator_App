@@ -1,9 +1,41 @@
 /**
- * News Aggregator - Frontend Application Logic
- * --------------------------------------------
- * Handles API fetching, DOM rendering, category switching, keyword search,
- * source filtering, sorting, bookmarks (localStorage), and dark mode.
+ * News Aggregator - Client-Side Application Logic (GitHub Pages Compatible)
+ * --------------------------------------------------------------------------
+ * Pure client-side operation with CORS-friendly news feeds, client-side
+ * rule-based sentiment analysis, live keyword search, filtering, sorting,
+ * bookmarking (localStorage), and dark mode.
  */
+
+// Sentiment Analysis Vocabulary (Ported from services/news_service.py)
+const POSITIVE_WORDS = new Set([
+  "surge", "surges", "gain", "gains", "growth", "grew", "boost", "boosts", "record",
+  "profit", "profits", "breakthrough", "success", "successful", "win", "wins", "won",
+  "positive", "hero", "cure", "recovers", "recovery", "soars", "advance", "advances",
+  "thrive", "opportunity", "hope", "optimistic", "praise", "praises", "milestone",
+  "celebrate", "triumph", "innovative", "leader", "safe", "peace", "award", "promising",
+  "upbeat", "rally", "rallies", "revolution", "achieve", "achievement", "victory"
+]);
+
+const NEGATIVE_WORDS = new Set([
+  "crash", "crashes", "drop", "drops", "fall", "falls", "loss", "losses", "crisis",
+  "fail", "fails", "failed", "failure", "death", "deaths", "dead", "kill", "killed",
+  "murder", "war", "conflict", "attack", "attacks", "threat", "danger", "warning",
+  "disaster", "scam", "fraud", "arrest", "arrested", "decline", "declines", "injury",
+  "ban", "bans", "banned", "lawsuit", "sues", "sued", "strike", "plunge", "plunges",
+  "controversy", "recession", "inflation", "protest", "fatal", "damage", "corrupt",
+  "tragedy", "tragic", "victim", "victims", "scandal", "bomb", "collapse", "severe"
+]);
+
+// Google News Topic Mapping for Categories
+const GOOGLE_NEWS_TOPICS = {
+  general: "",
+  business: "BUSINESS",
+  technology: "TECHNOLOGY",
+  sports: "SPORTS",
+  entertainment: "ENTERTAINMENT",
+  health: "HEALTH",
+  science: "SCIENCE"
+};
 
 // Global Application State
 const state = {
@@ -12,7 +44,7 @@ const state = {
   country: "us",
   source: "all",
   sortBy: "newest",
-  apiKey: localStorage.getItem("news_aggregator_api_key") || "",
+  apiKey: localStorage.getItem("news_aggregator_custom_key") || "",
   articles: [],
   sources: [],
   bookmarks: JSON.parse(localStorage.getItem("news_bookmarks") || "[]")
@@ -47,15 +79,10 @@ const elements = {
   bookmarksList: document.getElementById("bookmarksList"),
   clearAllBookmarksBtn: document.getElementById("clearAllBookmarksBtn"),
   
-  // Settings Modal (3 to 4 Keys)
+  // Settings Modal
   settingsBtn: document.getElementById("settingsBtn"),
   settingsModal: document.getElementById("settingsModal"),
-  apiKeyInputs: [
-    document.getElementById("apiKeyInput1"),
-    document.getElementById("apiKeyInput2"),
-    document.getElementById("apiKeyInput3"),
-    document.getElementById("apiKeyInput4")
-  ],
+  customApiKeyInput: document.getElementById("customApiKeyInput"),
   saveApiKeyBtn: document.getElementById("saveApiKeyBtn"),
   resetApiKeyBtn: document.getElementById("resetApiKeyBtn"),
   
@@ -69,7 +96,10 @@ document.addEventListener("DOMContentLoaded", () => {
   initTheme();
   updateBookmarkCounter();
   setupEventListeners();
-  loadKeyPoolStatus();
+
+  if (elements.customApiKeyInput && state.apiKey) {
+    elements.customApiKeyInput.value = state.apiKey;
+  }
 
   // Initial fetch
   fetchNews();
@@ -98,15 +128,15 @@ function setupEventListeners() {
     const query = elements.searchInput.value.trim();
     if (query) {
       state.query = query;
-      elements.searchClearBtn.style.display = "inline-block";
+      elements.searchClearBtn.style.display = "block";
       fetchNews();
     }
   });
 
-  // Search input typing - show/hide clear button
-  elements.searchInput.addEventListener("input", () => {
-    if (elements.searchInput.value.trim().length > 0) {
-      elements.searchClearBtn.style.display = "inline-block";
+  // Search live input clear button
+  elements.searchInput.addEventListener("input", (e) => {
+    if (e.target.value.trim().length > 0) {
+      elements.searchClearBtn.style.display = "block";
     } else {
       elements.searchClearBtn.style.display = "none";
       if (state.query) {
@@ -116,7 +146,6 @@ function setupEventListeners() {
     }
   });
 
-  // Clear search
   elements.searchClearBtn.addEventListener("click", () => {
     elements.searchInput.value = "";
     elements.searchClearBtn.style.display = "none";
@@ -124,15 +153,16 @@ function setupEventListeners() {
       state.query = "";
       fetchNews();
     }
+    elements.searchInput.focus();
   });
 
-  // Country select filter
+  // Country filter
   elements.countrySelect.addEventListener("change", (e) => {
     state.country = e.target.value;
     fetchNews();
   });
 
-  // News source filter
+  // Source filter
   elements.sourceSelect.addEventListener("change", (e) => {
     state.source = e.target.value;
     filterAndRenderArticles();
@@ -158,14 +188,21 @@ function setupEventListeners() {
   elements.clearAllBookmarksBtn.addEventListener("click", clearAllBookmarks);
 
   // Settings Modal
-  elements.settingsBtn.addEventListener("click", () => {
-    elements.settingsModal.classList.add("active");
-  });
+  if (elements.settingsBtn && elements.settingsModal) {
+    elements.settingsBtn.addEventListener("click", () => {
+      elements.settingsModal.classList.add("active");
+    });
+  }
 
-  elements.saveApiKeyBtn.addEventListener("click", saveAllApiKeys);
-  elements.resetApiKeyBtn.addEventListener("click", resetToFreeMode);
+  if (elements.saveApiKeyBtn) {
+    elements.saveApiKeyBtn.addEventListener("click", saveCustomApiKey);
+  }
 
-  // Modal Close buttons (by data-close-modal attribute or backdrop click)
+  if (elements.resetApiKeyBtn) {
+    elements.resetApiKeyBtn.addEventListener("click", resetToFreeMode);
+  }
+
+  // Modal Close buttons
   document.querySelectorAll("[data-close-modal]").forEach((btn) => {
     btn.addEventListener("click", () => {
       document.querySelectorAll(".modal-backdrop").forEach((m) => m.classList.remove("active"));
@@ -182,74 +219,260 @@ function setupEventListeners() {
 }
 
 /* ==========================================================================
-   2. Data Fetching & API Communication
+   2. Sentiment Analysis & NLP Helpers
+   ========================================================================== */
+function analyzeSentiment(text) {
+  if (!text) {
+    return { label: "Neutral", score: 0.0, badge_class: "badge-neutral" };
+  }
+
+  const cleanText = text.toLowerCase().replace(/[^\w\s]/g, " ");
+  const words = cleanText.split(/\s+/).filter(Boolean);
+
+  let posCount = 0;
+  let negCount = 0;
+
+  for (const word of words) {
+    if (POSITIVE_WORDS.has(word)) posCount++;
+    if (NEGATIVE_WORDS.has(word)) negCount++;
+  }
+
+  const total = posCount + negCount;
+  if (total === 0) {
+    return { label: "Neutral", score: 0.0, badge_class: "badge-neutral" };
+  }
+
+  const score = Math.round(((posCount - negCount) / Math.max(total, 1)) * 100) / 100;
+
+  if (score > 0.15) {
+    return { label: "Positive", score, badge_class: "badge-positive" };
+  } else if (score < -0.15) {
+    return { label: "Negative", score, badge_class: "badge-negative" };
+  } else {
+    return { label: "Neutral", score, badge_class: "badge-neutral" };
+  }
+}
+
+function formatRelativeTime(date) {
+  if (!date || isNaN(date.getTime())) return "Recent";
+  const now = new Date();
+  const diffSec = Math.max(0, Math.floor((now - date) / 1000));
+
+  if (diffSec < 60) return "Just now";
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHours = Math.floor(diffMin / 60);
+  if (diffHours < 24) return `${diffHours}h ago`;
+  const diffDays = Math.floor(diffHours / 24);
+  if (diffDays === 1) return "Yesterday";
+  if (diffDays < 7) return `${diffDays}d ago`;
+
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
+
+function stripHtml(htmlStr) {
+  if (!htmlStr) return "";
+  const tmp = document.createElement("div");
+  tmp.innerHTML = htmlStr;
+  return (tmp.textContent || tmp.innerText || "").trim();
+}
+
+/* ==========================================================================
+   3. Data Fetching & Multi-Feed Pipeline
    ========================================================================== */
 async function fetchNews() {
   renderSkeletons();
   updateSectionHeading();
 
-  const params = new URLSearchParams({
-    category: state.category,
-    q: state.query,
-    country: state.country,
-    sort_by: state.sortBy,
-    limit: "24"
-  });
-
-  if (state.apiKey) {
-    params.append("api_key", state.apiKey);
-  }
+  let rawArticles = [];
+  let providerName = "Free Live Feed";
 
   try {
-    const response = await fetch(`/api/news?${params.toString()}`);
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-
-    const data = await response.json();
-
-    if (data.status === "success") {
-      state.articles = data.articles || [];
-      state.sources = data.sources || [];
-
-      // Update provider indicator
-      elements.providerText.textContent = data.provider || "Free Live Feed";
-      if (data.key_pool && data.key_pool.total_keys > 0) {
-        elements.providerBadge.title = `Key Pool (${data.key_pool.total_keys} keys): ${data.key_pool.all_masked.join(", ")}`;
-      } else {
-        elements.providerBadge.title = "Live Global Feed (No API key needed)";
+    if (state.query) {
+      // Keyword search via Google News RSS through rss2json
+      providerName = "Google News Live Search";
+      rawArticles = await fetchGoogleNewsRssSearch(state.query, state.country);
+    } else {
+      // Category & region news via Saurav.tech mirror
+      providerName = "Live Global Feed";
+      try {
+        rawArticles = await fetchSauravNews(state.category, state.country);
+      } catch (err) {
+        console.warn("Primary feed failed, falling back to Google News RSS:", err);
       }
 
-      // Populate source filter dropdown
-      populateSourceDropdown(state.sources);
-
-      // Render cards
-      filterAndRenderArticles();
-    } else {
-      renderError("Failed to retrieve news. Please try again.");
+      // If primary returned empty or failed, fallback to Google News RSS
+      if (!rawArticles || rawArticles.length === 0) {
+        providerName = "Google News Live Feed";
+        rawArticles = await fetchGoogleNewsRssCategory(state.category, state.country);
+      }
     }
-  } catch (error) {
-    console.error("Fetch news error:", error);
-    renderError("Network error occurred while fetching news. Please check your connection.");
+
+    // Process, deduplicate and analyze sentiment for each article
+    const processed = processArticles(rawArticles);
+    state.articles = processed;
+
+    // Collect distinct publisher sources for the filter dropdown
+    const sourceSet = new Set();
+    processed.forEach((a) => {
+      if (a.source && a.source !== "Unknown") sourceSet.add(a.source);
+    });
+    state.sources = Array.from(sourceSet).sort();
+
+    // Update provider status badge
+    elements.providerText.textContent = providerName;
+    elements.providerBadge.title = `Data source: ${providerName} (CORS-friendly live feed)`;
+
+    populateSourceDropdown(state.sources);
+    filterAndRenderArticles();
+  } catch (err) {
+    console.error("All news feed attempts failed:", err);
+    renderError("Unable to connect to live news feeds. Please check your internet connection and try again.");
   }
 }
 
+/**
+ * Fetch from Saurav.tech NewsAPI Mirror (Exact NewsAPI structure, CORS allowed)
+ */
+async function fetchSauravNews(category, country) {
+  const url = `https://saurav.tech/NewsAPI/top-headlines/category/${encodeURIComponent(category)}/${encodeURIComponent(country)}.json`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Saurav feed returned HTTP ${res.status}`);
+  const data = await res.json();
+
+  if (data.status === "ok" && Array.isArray(data.articles)) {
+    return data.articles.map((item) => ({
+      title: item.title,
+      description: item.description || item.content,
+      url: item.url,
+      image_url: item.urlToImage || "./static/images/placeholder.svg",
+      source: item.source && item.source.name ? item.source.name : "News",
+      published_at_raw: item.publishedAt,
+      category: state.category
+    }));
+  }
+  return [];
+}
+
+/**
+ * Fetch Google News RSS for Search via rss2json
+ */
+async function fetchGoogleNewsRssSearch(query, country) {
+  const gl = country.toUpperCase();
+  const rssUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-${gl}&gl=${gl}&ceid=${gl}:en`;
+  return await fetchViaRss2Json(rssUrl);
+}
+
+/**
+ * Fetch Google News RSS for Categories via rss2json
+ */
+async function fetchGoogleNewsRssCategory(category, country) {
+  const gl = country.toUpperCase();
+  const topic = GOOGLE_NEWS_TOPICS[category];
+  let rssUrl = `https://news.google.com/rss?hl=en-${gl}&gl=${gl}&ceid=${gl}:en`;
+  if (topic) {
+    rssUrl = `https://news.google.com/rss/headlines/section/topic/${topic}?hl=en-${gl}&gl=${gl}&ceid=${gl}:en`;
+  }
+  return await fetchViaRss2Json(rssUrl);
+}
+
+/**
+ * Helper to fetch and parse RSS feeds via rss2json.com
+ */
+async function fetchViaRss2Json(rssUrl) {
+  const apiUrl = `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(rssUrl)}`;
+  const res = await fetch(apiUrl);
+  if (!res.ok) throw new Error(`rss2json returned HTTP ${res.status}`);
+  const data = await res.json();
+
+  if (data.status === "ok" && Array.isArray(data.items)) {
+    return data.items.map((item) => {
+      // Extract publisher source from title (Google News format: "Headline - Source Name")
+      let title = item.title || "";
+      let sourceName = "Google News";
+      const lastDash = title.lastIndexOf(" - ");
+      if (lastDash > 0) {
+        sourceName = title.substring(lastDash + 3).trim();
+        title = title.substring(0, lastDash).trim();
+      }
+
+      // Clean HTML from description
+      let cleanDesc = stripHtml(item.description || item.content || "");
+      if (cleanDesc.length > 250) {
+        cleanDesc = cleanDesc.substring(0, 247) + "...";
+      }
+
+      const imageUrl = item.thumbnail || (item.enclosure && item.enclosure.link) || "./static/images/placeholder.svg";
+
+      return {
+        title,
+        description: cleanDesc,
+        url: item.link,
+        image_url: imageUrl,
+        source: sourceName,
+        published_at_raw: item.pubDate,
+        category: state.category
+      };
+    });
+  }
+  return [];
+}
+
+/**
+ * Post-processes, deduplicates, and adds sentiment analysis to articles
+ */
+function processArticles(articles) {
+  const seenUrls = new Set();
+  const seenTitles = new Set();
+  const result = [];
+
+  for (const a of articles) {
+    if (!a.title || a.title.includes("[Removed]")) continue;
+    if (!a.url) continue;
+
+    const normUrl = a.url.toLowerCase();
+    const normTitle = a.title.toLowerCase().trim();
+
+    if (seenUrls.has(normUrl) || seenTitles.has(normTitle)) continue;
+    seenUrls.add(normUrl);
+    seenTitles.add(normTitle);
+
+    const pubDate = a.published_at_raw ? new Date(a.published_at_raw) : new Date();
+    const sentiment = analyzeSentiment(`${a.title} ${a.description || ""}`);
+
+    result.push({
+      ...a,
+      published_at: pubDate.toLocaleString("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit"
+      }),
+      time_ago: formatRelativeTime(pubDate),
+      sentiment
+    });
+  }
+
+  return result;
+}
+
 /* ==========================================================================
-   3. Filtering, Sorting & Rendering
+   4. Filtering, Sorting & Rendering
    ========================================================================== */
 function filterAndRenderArticles() {
   let list = [...state.articles];
 
   // 1. Source filtering
   if (state.source && state.source !== "all") {
-    list = list.filter((a) => a.source.toLowerCase() === state.source.toLowerCase());
+    list = list.filter((a) => (a.source || "").toLowerCase() === state.source.toLowerCase());
   }
 
   // 2. Client-side sorting
   if (state.sortBy === "oldest") {
     list.sort((a, b) => new Date(a.published_at_raw) - new Date(b.published_at_raw));
   } else if (state.sortBy === "title") {
-    list.sort((a, b) => a.title.localeCompare(b.title));
+    list.sort((a, b) => (a.title || "").localeCompare(b.title || ""));
   } else {
     // Newest first
     list.sort((a, b) => new Date(b.published_at_raw) - new Date(a.published_at_raw));
@@ -263,8 +486,6 @@ function filterAndRenderArticles() {
   }
 
   elements.newsGrid.innerHTML = list.map((article, index) => createNewsCardHTML(article, index)).join("");
-
-  // Attach card event listeners (image errors, bookmarks)
   attachCardEvents();
 }
 
@@ -277,15 +498,17 @@ function createNewsCardHTML(article, index) {
   const sentiment = article.sentiment || { label: "Neutral", badge_class: "badge-neutral" };
   const sentimentIcon = sentiment.label === "Positive" ? "🟢" : sentiment.label === "Negative" ? "🔴" : "⚪";
 
+  const imgUrl = article.image_url || "./static/images/placeholder.svg";
+
   return `
     <article class="news-card" data-index="${index}">
       <div class="card-media">
         <img 
           class="card-img" 
-          src="${escapeHTML(article.image_url)}" 
+          src="${escapeHTML(imgUrl)}" 
           alt="${escapeHTML(article.title)}" 
           loading="lazy"
-          onerror="this.onerror=null; this.src='/static/images/placeholder.svg';"
+          onerror="this.onerror=null; this.src='./static/images/placeholder.svg';"
         >
         <div class="media-badges">
           <span class="source-badge">${escapeHTML(article.source || "News")}</span>
@@ -321,7 +544,7 @@ function createNewsCardHTML(article, index) {
         </p>
 
         <div class="card-footer">
-          <span style="font-size: 0.75rem; color: var(--text-dim);">${escapeHTML(article.source)}</span>
+          <span style="font-size: 0.75rem; color: var(--text-dim);">${escapeHTML(article.source || "")}</span>
           <a 
             href="${escapeHTML(article.url)}" 
             target="_blank" 
@@ -379,7 +602,7 @@ function updateSectionHeading() {
 }
 
 /* ==========================================================================
-   4. Loading, Empty & Error UI States
+   5. Loading, Empty & Error UI States
    ========================================================================== */
 function renderSkeletons() {
   elements.resultsCount.textContent = "Fetching latest articles...";
@@ -424,7 +647,7 @@ function renderError(message) {
   `;
 }
 
-function resetFilters() {
+window.resetFilters = function () {
   state.query = "";
   state.category = "general";
   state.source = "all";
@@ -437,10 +660,10 @@ function resetFilters() {
   elements.sourceSelect.value = "all";
   elements.sortSelect.value = "newest";
   fetchNews();
-}
+};
 
 /* ==========================================================================
-   5. Bookmarks Management (localStorage)
+   6. Bookmarks Management (localStorage)
    ========================================================================== */
 function toggleBookmark(article) {
   const existingIdx = state.bookmarks.findIndex((b) => b.url === article.url);
@@ -449,13 +672,15 @@ function toggleBookmark(article) {
     state.bookmarks.splice(existingIdx, 1);
     showToast("Article removed from bookmarks");
   } else {
-    state.bookmarks.unshift({
+    state.bookmarks.push({
       title: article.title,
       url: article.url,
-      image_url: article.image_url,
       source: article.source,
+      image_url: article.image_url,
       published_at: article.published_at,
-      time_ago: article.time_ago
+      time_ago: article.time_ago,
+      category: article.category,
+      saved_at: new Date().toISOString()
     });
     showToast("Article saved to bookmarks! 🔖");
   }
@@ -467,6 +692,7 @@ function toggleBookmark(article) {
 
 function updateBookmarkCounter() {
   elements.bookmarkCount.textContent = state.bookmarks.length;
+  elements.bookmarkCount.style.display = state.bookmarks.length > 0 ? "inline-flex" : "none";
 }
 
 function openBookmarksModal() {
@@ -477,10 +703,10 @@ function openBookmarksModal() {
 function renderBookmarksList() {
   if (state.bookmarks.length === 0) {
     elements.bookmarksList.innerHTML = `
-      <div style="text-align: center; padding: 2rem 1rem; color: var(--text-muted);">
-        <p style="font-size: 2rem; margin-bottom: 0.5rem;">📭</p>
-        <p>No saved bookmarks yet.</p>
-        <p style="font-size: 0.8rem; color: var(--text-dim);">Click the star/bookmark icon on any card to save it for later.</p>
+      <div class="state-container" style="padding: 2rem 1rem;">
+        <div class="state-icon" style="font-size: 2.5rem;">🔖</div>
+        <h4 style="font-size: 1.1rem; margin-bottom: 0.5rem;">No Saved Articles</h4>
+        <p style="color: var(--text-dim); font-size: 0.85rem;">Bookmark interesting articles to read them later anytime.</p>
       </div>
     `;
     return;
@@ -490,13 +716,20 @@ function renderBookmarksList() {
     .map(
       (b, idx) => `
       <div class="bookmark-item">
-        <img src="${escapeHTML(b.image_url)}" class="bookmark-thumb" alt="" onerror="this.src='/static/images/placeholder.svg';">
+        <img 
+          src="${escapeHTML(b.image_url || "./static/images/placeholder.svg")}" 
+          class="bookmark-thumb" 
+          alt="" 
+          onerror="this.src='./static/images/placeholder.svg';"
+        >
         <div class="bookmark-info">
           <a href="${escapeHTML(b.url)}" target="_blank" rel="noopener noreferrer" class="bookmark-title">
             ${escapeHTML(b.title)}
           </a>
           <div class="bookmark-meta">
-            ${escapeHTML(b.source)} &bull; ${escapeHTML(b.time_ago || "Saved")}
+            <span>${escapeHTML(b.source || "News")}</span>
+            <span>&bull;</span>
+            <span>${escapeHTML(b.time_ago || "Saved")}</span>
           </div>
         </div>
         <button class="bookmark-del-btn" onclick="removeBookmark(${idx})" title="Remove bookmark">
@@ -530,78 +763,35 @@ function clearAllBookmarks() {
 }
 
 /* ==========================================================================
-   6. API Settings & Multi-Key Pool Handling
+   7. Settings & Key Preferences (localStorage)
    ========================================================================== */
-async function loadKeyPoolStatus() {
-  try {
-    const res = await fetch("/api/keys");
-    const data = await res.json();
-    if (data.pool && data.pool.masked_keys) {
-      data.pool.masked_keys.forEach((masked, idx) => {
-        if (elements.apiKeyInputs[idx] && masked !== "********") {
-          elements.apiKeyInputs[idx].placeholder = masked;
-        }
-      });
-    }
-  } catch (err) {
-    console.warn("Could not load API key pool status:", err);
+function saveCustomApiKey() {
+  if (!elements.customApiKeyInput) return;
+  const key = elements.customApiKeyInput.value.trim();
+  if (key) {
+    state.apiKey = key;
+    localStorage.setItem("news_aggregator_custom_key", key);
+    showToast("Custom key saved! 🔑");
+  } else {
+    localStorage.removeItem("news_aggregator_custom_key");
+    state.apiKey = "";
+    showToast("Switched to Free Live Feed");
   }
+  elements.settingsModal.classList.remove("active");
+  fetchNews();
 }
 
-async function saveAllApiKeys() {
-  const enteredKeys = elements.apiKeyInputs
-    .map((input) => input.value.trim())
-    .filter((k) => k.length > 0);
-
-  if (enteredKeys.length === 0) {
-    alert("Please enter at least 1 API key or click 'Use Free Live Feed'.");
-    return;
-  }
-
-  try {
-    const res = await fetch("/api/keys", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ keys: enteredKeys })
-    });
-
-    const data = await res.json();
-    if (data.status === "success") {
-      elements.settingsModal.classList.remove("active");
-      showToast(`Saved ${enteredKeys.length} keys in rotation pool! 🔑`);
-      // Clear values and update placeholders with masked strings
-      elements.apiKeyInputs.forEach((input) => {
-        input.value = "";
-      });
-      loadKeyPoolStatus();
-      fetchNews();
-    }
-  } catch (err) {
-    showToast("Failed to save keys to server");
-  }
-}
-
-async function resetToFreeMode() {
-  try {
-    await fetch("/api/keys", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ keys: [] })
-    });
-    elements.apiKeyInputs.forEach((input) => {
-      input.value = "";
-      input.placeholder = "Empty";
-    });
-    elements.settingsModal.classList.remove("active");
-    showToast("Switched to Free Live Feed!");
-    fetchNews();
-  } catch (err) {
-    showToast("Failed to reset API keys");
-  }
+function resetToFreeMode() {
+  localStorage.removeItem("news_aggregator_custom_key");
+  state.apiKey = "";
+  if (elements.customApiKeyInput) elements.customApiKeyInput.value = "";
+  elements.settingsModal.classList.remove("active");
+  showToast("Switched to Free Live Feed!");
+  fetchNews();
 }
 
 /* ==========================================================================
-   7. Theme Toggle (Dark / Light)
+   8. Theme Toggle (Dark / Light)
    ========================================================================== */
 function initTheme() {
   const savedTheme = localStorage.getItem("news_theme");
@@ -627,7 +817,7 @@ function updateThemeIcon(theme) {
 }
 
 /* ==========================================================================
-   8. Utility Functions
+   9. Utility Functions
    ========================================================================== */
 function showToast(message) {
   const toast = document.createElement("div");
